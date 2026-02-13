@@ -1,4 +1,10 @@
-"""Turn-based RPG: Reptiles (spellcasters) vs Mammals (melee fighters).
+"""Lizard Wizard Arena - 2v2 turn-based RPG.
+
+Features:
+- Reptiles are spellcasters; mammals are melee specialists.
+- Two-player style move selection (you choose moves for both teams) each round.
+- Round actions resolve in order of fighter speed (SPD).
+- Detailed character roster with unique HP/DEF/SPD and ability drawbacks.
 
 Run:
     python rpg_game.py
@@ -12,143 +18,377 @@ from typing import Callable
 
 
 @dataclass(frozen=True)
-class Move:
+class Ability:
     name: str
-    min_damage: int
-    max_damage: int
-    description: str
-
-    def roll_damage(self) -> int:
-        return random.randint(self.min_damage, self.max_damage)
+    power: int
+    kind: str  # attack | heavy_attack | self_heal | guard_break
+    accuracy: float = 1.0
+    self_damage: int = 0
+    self_slow: int = 0
+    target_defense_scale: float = 1.0
+    heal_amount: int = 0
+    description: str = ""
 
 
 @dataclass
 class Fighter:
     name: str
-    species_type: str
+    faction: str  # reptile | mammal
     hp: int
     max_hp: int
-    moves: list[Move]
-    is_ai: bool = False
+    defense: int
+    speed: int
+    abilities: list[Ability]
 
     @property
     def alive(self) -> bool:
         return self.hp > 0
 
-    def take_damage(self, amount: int) -> None:
-        self.hp = max(self.hp - amount, 0)
+    def take_damage(self, amount: int) -> int:
+        dealt = max(amount, 0)
+        self.hp = max(self.hp - dealt, 0)
+        return dealt
 
-    def heal(self, amount: int) -> None:
-        self.hp = min(self.hp + amount, self.max_hp)
+    def heal(self, amount: int) -> int:
+        before = self.hp
+        self.hp = min(self.max_hp, self.hp + max(0, amount))
+        return self.hp - before
 
 
-REPTILE_MOVES = [
-    Move("Fire Spit", 12, 20, "Spit blazing magic at your enemy."),
-    Move("Venom Hex", 8, 18, "Curse the foe with poisonous sorcery."),
-    Move("Tailstorm", 10, 16, "Summon a whipping magical tail wind."),
-]
+@dataclass
+class PlannedAction:
+    actor: Fighter
+    ability: Ability
+    target: Fighter
 
-MAMMAL_MOVES = [
-    Move("Sword Slash", 10, 18, "A fast cut with a sharp blade."),
-    Move("Hammer Blow", 12, 20, "A heavy strike with crushing force."),
-    Move("Shield Bash", 8, 14, "Bash the opponent and stagger them."),
-]
+
+def build_roster() -> dict[str, dict[str, Fighter]]:
+    reptiles = {
+        "pyra": Fighter(
+            name="Pyra",
+            faction="reptile",
+            hp=100,
+            max_hp=100,
+            defense=8,
+            speed=14,
+            abilities=[
+                Ability("Flame Dart", 24, "attack", description="Reliable fire spell."),
+                Ability("Volcanic Surge", 38, "heavy_attack", accuracy=0.75, self_damage=6, description="Huge burst; recoil on cast."),
+                Ability("Molten Shedding", 0, "self_heal", heal_amount=20, self_slow=2, description="Heals but lowers own speed this round."),
+            ],
+        ),
+        "strix": Fighter(
+            name="Strix",
+            faction="reptile",
+            hp=92,
+            max_hp=92,
+            defense=7,
+            speed=18,
+            abilities=[
+                Ability("Arc Lash", 20, "attack", description="Fast crackling strike."),
+                Ability("Static Implosion", 34, "heavy_attack", accuracy=0.8, self_slow=3, description="Big damage but drains momentum."),
+                Ability("Hex Siphon", 16, "guard_break", target_defense_scale=0.4, description="Penetrates defense with cursed shock."),
+            ],
+        ),
+        "verdra": Fighter(
+            name="Verdra",
+            faction="reptile",
+            hp=112,
+            max_hp=112,
+            defense=11,
+            speed=10,
+            abilities=[
+                Ability("Thorn Volley", 22, "attack", description="Nature-infused projectile burst."),
+                Ability("Basilisk Gaze", 30, "guard_break", target_defense_scale=0.3, accuracy=0.85, description="Armor-piercing petrify beam."),
+                Ability("Regrowth Ritual", 0, "self_heal", heal_amount=26, self_damage=5, description="Powerful heal that costs blood."),
+            ],
+        ),
+        "nox": Fighter(
+            name="Nox",
+            faction="reptile",
+            hp=98,
+            max_hp=98,
+            defense=9,
+            speed=15,
+            abilities=[
+                Ability("Shadow Fang", 23, "attack", description="Dark magic bite."),
+                Ability("Nightfall Rift", 40, "heavy_attack", accuracy=0.7, self_damage=8, description="Massive tear in space, harsh recoil."),
+                Ability("Veil Pierce", 18, "guard_break", target_defense_scale=0.2, description="Low raw damage, almost ignores armor."),
+            ],
+        ),
+    }
+
+    mammals = {
+        "brakk": Fighter(
+            name="Brakk",
+            faction="mammal",
+            hp=120,
+            max_hp=120,
+            defense=13,
+            speed=9,
+            abilities=[
+                Ability("Cleaver Chop", 22, "attack", description="Heavy cleaver slash."),
+                Ability("Earthsplitter", 36, "heavy_attack", accuracy=0.78, self_slow=2, description="Crushing blow; slows the wielder."),
+                Ability("Ribbreaker", 19, "guard_break", target_defense_scale=0.35, description="Armor-cracking strike."),
+            ],
+        ),
+        "lyra": Fighter(
+            name="Lyra",
+            faction="mammal",
+            hp=96,
+            max_hp=96,
+            defense=8,
+            speed=19,
+            abilities=[
+                Ability("Twin Daggers", 21, "attack", description="Rapid dual stab."),
+                Ability("Crimson Rush", 33, "heavy_attack", accuracy=0.82, self_damage=5, description="Risky lunge with self-bleed."),
+                Ability("Bandage Twist", 0, "self_heal", heal_amount=18, self_slow=1, description="Patch wounds, lose a bit of tempo."),
+            ],
+        ),
+        "tor": Fighter(
+            name="Tor",
+            faction="mammal",
+            hp=110,
+            max_hp=110,
+            defense=12,
+            speed=12,
+            abilities=[
+                Ability("Warhammer Jab", 23, "attack", description="Controlled hammer strike."),
+                Ability("Sundering Slam", 31, "guard_break", target_defense_scale=0.25, accuracy=0.86, description="Defense-shattering overhead swing."),
+                Ability("Last Stand", 39, "heavy_attack", accuracy=0.72, self_damage=9, description="Huge hit with dangerous recoil."),
+            ],
+        ),
+        "sable": Fighter(
+            name="Sable",
+            faction="mammal",
+            hp=104,
+            max_hp=104,
+            defense=10,
+            speed=16,
+            abilities=[
+                Ability("Spear Thrust", 22, "attack", description="Precise piercing thrust."),
+                Ability("Skewer Storm", 35, "heavy_attack", accuracy=0.79, self_slow=2, description="Ferocious combo that overextends."),
+                Ability("Hamstring Cut", 17, "guard_break", target_defense_scale=0.3, description="Lowers impact of enemy armor."),
+            ],
+        ),
+    }
+
+    return {"reptile": reptiles, "mammal": mammals}
 
 
 InputFn = Callable[[str], str]
 
 
-def choose_species(input_fn: InputFn = input) -> str:
+def show_main_menu() -> None:
+    print("\n=== Lizard Wizard Arena ===")
+    print("1) Start 2v2 Battle")
+    print("2) View Character Compendium")
+    print("3) Quit")
+
+
+def print_roster_details(roster: dict[str, dict[str, Fighter]]) -> None:
+    print("\n=== Character Compendium ===")
+    for faction in ("reptile", "mammal"):
+        print(f"\n{faction.title()} Team")
+        print("-" * 60)
+        for fighter in roster[faction].values():
+            print(f"{fighter.name}: HP {fighter.max_hp} | DEF {fighter.defense} | SPD {fighter.speed}")
+            for ab in fighter.abilities:
+                drawback = []
+                if ab.self_damage:
+                    drawback.append(f"self-dmg {ab.self_damage}")
+                if ab.self_slow:
+                    drawback.append(f"self-slow {ab.self_slow}")
+                if ab.accuracy < 1.0:
+                    drawback.append(f"{int(ab.accuracy * 100)}% hit")
+                drawback_text = f" | Drawback: {', '.join(drawback)}" if drawback else ""
+                effect = f"power {ab.power}" if ab.kind != "self_heal" else f"heal {ab.heal_amount}"
+                print(f"  - {ab.name}: {effect}. {ab.description}{drawback_text}")
+
+
+def prompt_choice(input_fn: InputFn, prompt: str, low: int, high: int) -> int:
     while True:
-        print("Choose your class:")
-        print("1) Reptile (spellcaster)")
-        print("2) Mammal (melee)")
-        choice = input_fn("Enter 1 or 2: ").strip()
-
-        if choice == "1":
-            return "reptile"
-        if choice == "2":
-            return "mammal"
-
-        print("Invalid choice. Try again.\n")
+        raw = input_fn(prompt).strip()
+        if raw.isdigit() and low <= int(raw) <= high:
+            return int(raw)
+        print(f"Please enter a number from {low} to {high}.")
 
 
-def build_fighter(name: str, species_type: str, is_ai: bool = False) -> Fighter:
-    if species_type == "reptile":
-        return Fighter(name=name, species_type=species_type, hp=100, max_hp=100, moves=REPTILE_MOVES.copy(), is_ai=is_ai)
-    return Fighter(name=name, species_type=species_type, hp=110, max_hp=110, moves=MAMMAL_MOVES.copy(), is_ai=is_ai)
+def choose_team(
+    label: str,
+    faction: str,
+    roster: dict[str, dict[str, Fighter]],
+    input_fn: InputFn,
+) -> list[Fighter]:
+    available = list(roster[faction].keys())
+    selected: list[Fighter] = []
+    print(f"\nChoose 2 {faction} fighters for {label}:")
+
+    while len(selected) < 2:
+        print("\nAvailable fighters:")
+        for i, key in enumerate(available, start=1):
+            f = roster[faction][key]
+            print(f"{i}) {f.name} (HP {f.max_hp}, DEF {f.defense}, SPD {f.speed})")
+
+        idx = prompt_choice(input_fn, f"Select fighter {len(selected) + 1}: ", 1, len(available)) - 1
+        picked_key = available.pop(idx)
+        proto = roster[faction][picked_key]
+        selected.append(
+            Fighter(
+                name=proto.name,
+                faction=proto.faction,
+                hp=proto.max_hp,
+                max_hp=proto.max_hp,
+                defense=proto.defense,
+                speed=proto.speed,
+                abilities=proto.abilities,
+            )
+        )
+    return selected
 
 
-def choose_move_human(fighter: Fighter, input_fn: InputFn = input) -> Move:
-    while True:
-        print(f"\n{fighter.name}'s turn. HP: {fighter.hp}/{fighter.max_hp}")
-        for i, move in enumerate(fighter.moves, start=1):
-            print(f"{i}) {move.name} ({move.min_damage}-{move.max_damage} dmg): {move.description}")
-
-        raw = input_fn("Select move number: ").strip()
-        if raw.isdigit():
-            idx = int(raw) - 1
-            if 0 <= idx < len(fighter.moves):
-                return fighter.moves[idx]
-
-        print("Invalid move selection. Try again.")
+def list_targets(enemy_team: list[Fighter]) -> list[Fighter]:
+    return [f for f in enemy_team if f.alive]
 
 
-def choose_move_ai(fighter: Fighter) -> Move:
-    return random.choice(fighter.moves)
+def choose_action(actor: Fighter, enemy_team: list[Fighter], input_fn: InputFn, controller_label: str) -> PlannedAction:
+    print(f"\n[{controller_label}] {actor.name} (HP {actor.hp}/{actor.max_hp}, SPD {actor.speed}) choose ability:")
+    for i, ab in enumerate(actor.abilities, start=1):
+        extra = []
+        if ab.self_damage:
+            extra.append(f"self-dmg {ab.self_damage}")
+        if ab.self_slow:
+            extra.append(f"self-slow {ab.self_slow}")
+        if ab.accuracy < 1.0:
+            extra.append(f"{int(ab.accuracy * 100)}% hit")
+        extra_text = f" ({', '.join(extra)})" if extra else ""
+        print(f"{i}) {ab.name} - {ab.description}{extra_text}")
+
+    ability = actor.abilities[prompt_choice(input_fn, "Choose ability: ", 1, len(actor.abilities)) - 1]
+
+    targets = list_targets(enemy_team)
+    if not targets:
+        return PlannedAction(actor=actor, ability=ability, target=actor)
+
+    print("Choose target:")
+    for i, t in enumerate(targets, start=1):
+        print(f"{i}) {t.name} (HP {t.hp}/{t.max_hp}, DEF {t.defense}, SPD {t.speed})")
+    target = targets[prompt_choice(input_fn, "Choose target: ", 1, len(targets)) - 1]
+    return PlannedAction(actor=actor, ability=ability, target=target)
 
 
-def perform_turn(attacker: Fighter, defender: Fighter, input_fn: InputFn = input) -> None:
-    move = choose_move_ai(attacker) if attacker.is_ai else choose_move_human(attacker, input_fn)
-    damage = move.roll_damage()
-    defender.take_damage(damage)
-
-    print(f"\n{attacker.name} uses {move.name}! It deals {damage} damage to {defender.name}.")
-    print(f"{defender.name} HP: {defender.hp}/{defender.max_hp}")
+def calculate_damage(ability: Ability, attacker: Fighter, target: Fighter) -> int:
+    base = ability.power + random.randint(-4, 4)
+    effective_def = int(target.defense * ability.target_defense_scale)
+    dmg = base - effective_def
+    return max(dmg, 1)
 
 
-def battle(player: Fighter, enemy: Fighter, input_fn: InputFn = input) -> Fighter:
-    print("\n=== BATTLE START ===")
-    print(f"{player.name} ({player.species_type.title()}) vs {enemy.name} ({enemy.species_type.title()})")
+def resolve_action(action: PlannedAction) -> None:
+    actor = action.actor
+    ability = action.ability
+    target = action.target
 
-    turn_order = [player, enemy]
-    random.shuffle(turn_order)
+    if not actor.alive:
+        print(f"{actor.name} is down and cannot act.")
+        return
 
-    print(f"\n{turn_order[0].name} goes first!")
-
-    while player.alive and enemy.alive:
-        attacker, defender = turn_order
-        perform_turn(attacker, defender, input_fn)
-
-        if not defender.alive:
-            print(f"\n{defender.name} has fallen!")
-            print(f"{attacker.name} wins the battle!")
-            return attacker
-
-        turn_order.reverse()
-
-    return player if player.alive else enemy
-
-
-def main() -> None:
-    print("Welcome to Lizard Wizard RPG!")
-    player_name = input("Enter your fighter name: ").strip() or "Hero"
-    player_species = choose_species()
-    player = build_fighter(player_name, player_species, is_ai=False)
-
-    ai_species = "mammal" if player_species == "reptile" else "reptile"
-    enemy_name = random.choice(["Fang", "Brutus", "Sable", "Rexa"])
-    enemy = build_fighter(enemy_name, ai_species, is_ai=True)
-
-    print(f"\nYou are a {player.species_type} with {player.hp} HP.")
-    print(f"Your opponent is {enemy.name}, a {enemy.species_type} with {enemy.hp} HP.")
-
-    winner = battle(player, enemy)
-
-    if winner is player:
-        print("\nVictory is yours!")
+    if ability.kind == "self_heal":
+        healed = actor.heal(ability.heal_amount)
+        print(f"{actor.name} uses {ability.name} and heals {healed} HP.")
     else:
-        print("\nDefeat... but you can always play again!")
+        if not target.alive:
+            print(f"{actor.name} tries {ability.name}, but target is already down.")
+        elif random.random() <= ability.accuracy:
+            damage = calculate_damage(ability, actor, target)
+            target.take_damage(damage)
+            print(f"{actor.name} uses {ability.name} on {target.name} for {damage} damage.")
+        else:
+            print(f"{actor.name} uses {ability.name} but misses!")
+
+    if ability.self_damage:
+        recoil = actor.take_damage(ability.self_damage)
+        print(f" -> Drawback: {actor.name} takes {recoil} recoil damage.")
+
+    if ability.self_slow:
+        old_speed = actor.speed
+        actor.speed = max(1, actor.speed - ability.self_slow)
+        print(f" -> Drawback: {actor.name}'s speed drops {old_speed} -> {actor.speed}.")
+
+
+def all_down(team: list[Fighter]) -> bool:
+    return all(not f.alive for f in team)
+
+
+def display_teams(team_a: list[Fighter], team_b: list[Fighter]) -> None:
+    print("\nTeam Reptiles:")
+    for f in team_a:
+        print(f"- {f.name}: HP {f.hp}/{f.max_hp} | DEF {f.defense} | SPD {f.speed}")
+
+    print("Team Mammals:")
+    for f in team_b:
+        print(f"- {f.name}: HP {f.hp}/{f.max_hp} | DEF {f.defense} | SPD {f.speed}")
+
+
+def battle_2v2(reptiles: list[Fighter], mammals: list[Fighter], input_fn: InputFn) -> None:
+    round_no = 1
+    print("\n=== 2v2 BATTLE START ===")
+
+    while not all_down(reptiles) and not all_down(mammals):
+        print(f"\n===== ROUND {round_no} =====")
+        display_teams(reptiles, mammals)
+
+        plans: list[PlannedAction] = []
+
+        # Both "players" choose for their side before actions resolve.
+        for fighter in reptiles:
+            if fighter.alive:
+                plans.append(choose_action(fighter, mammals, input_fn, "Reptile Player"))
+        for fighter in mammals:
+            if fighter.alive:
+                plans.append(choose_action(fighter, reptiles, input_fn, "Mammal Player"))
+
+        # Resolve by current speed descending; tiebreak random.
+        plans.sort(key=lambda p: (p.actor.speed, random.random()), reverse=True)
+
+        print("\n--- Action Resolution (by speed) ---")
+        for action in plans:
+            resolve_action(action)
+
+        round_no += 1
+
+    print("\n=== BATTLE OVER ===")
+    if all_down(reptiles) and all_down(mammals):
+        print("It's a draw! Both teams were wiped out.")
+    elif all_down(mammals):
+        print("Reptiles win!")
+    else:
+        print("Mammals win!")
+
+
+def main(input_fn: InputFn = input) -> None:
+    roster = build_roster()
+
+    while True:
+        show_main_menu()
+        choice = prompt_choice(input_fn, "Choose option: ", 1, 3)
+
+        if choice == 2:
+            print_roster_details(roster)
+            continue
+
+        if choice == 3:
+            print("Goodbye!")
+            return
+
+        reptiles = choose_team("Reptile Player", "reptile", roster, input_fn)
+        mammals = choose_team("Mammal Player", "mammal", roster, input_fn)
+        battle_2v2(reptiles, mammals, input_fn)
+
+        again = input_fn("\nPlay another match? (y/n): ").strip().lower()
+        if again != "y":
+            print("Thanks for playing!")
+            return
 
 
 if __name__ == "__main__":
